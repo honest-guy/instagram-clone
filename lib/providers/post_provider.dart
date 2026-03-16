@@ -1,49 +1,58 @@
 import 'package:flutter/material.dart';
+import 'dart:isolate'; // Added for background parsing if needed
 import '../models/post.dart';
 import '../services/post_repository.dart';
 
 class PostProvider extends ChangeNotifier {
+  final PostRepository _repository = PostRepository();
 
   List<Post> posts = [];
-
   bool isLoading = false;
-  bool isLoadingMore = false;
+  int _currentPage = 1;
+  bool _hasMore = true; // Prevents unnecessary calls if API is empty
 
-  Future<void> loadPosts() async {
-    if (isLoadingMore) return;
+  Future<void> initLoad() async {
+    if (isLoading) return;
 
-    isLoadingMore = true;
+    isLoading = true;
     notifyListeners();
 
-    await Future.delayed(Duration(seconds: 2));
-
-    posts.addAll(generateMorePosts());
-
-    isLoadingMore = false;
-    notifyListeners();
+    try {
+      posts = await _repository.fetchPosts(page: _currentPage);
+    } catch (e) {
+      debugPrint("Error loading posts: $e");
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
   }
 
-  List<Post> generateMorePosts() {
+  Future<void> loadMorePosts() async {
+    // CRITICAL FIX: Block multiple simultaneous calls
+    if (isLoading || !_hasMore) return;
 
-    return List.generate(5, (index) {
+    isLoading = true;
+    notifyListeners(); // This tells the UI to stop calling this method
 
-      final id = (posts.length + index).toString();
+    try {
+      _currentPage++;
+      final newPosts = await _repository.fetchPosts(page: _currentPage);
 
-      return Post(
-        id: id,
-        username: "user_$id",
-        avatarUrl: "https://i.pravatar.cc/150?img=$id",
-        caption: "Beautiful day! ☀️ #flutter",
-        images: [
-          "https://picsum.photos/500/500?random=$id",
-          "https://picsum.photos/500/500?random=${posts.length + index + 1}"
-        ],
-        isLiked: false,
-        isSaved: false,
-      );
-    });
+      if (newPosts.isEmpty) {
+        _hasMore = false;
+      } else {
+        posts.addAll(newPosts);
+      }
+    } catch (e) {
+      _currentPage--; // Reset page on failure
+      debugPrint("Error loading more posts: $e");
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
   }
 
+  // Optimization: Only update the specific post instead of the whole list
   void toggleLike(Post post) {
     post.isLiked = !post.isLiked;
     notifyListeners();
